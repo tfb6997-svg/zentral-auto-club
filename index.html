@@ -173,6 +173,12 @@
   .total-box{display:flex;justify-content:space-between;align-items:center;background:var(--ink);color:#fff;border-radius:12px;padding:14px 16px;margin:14px 0;}
   .total-box .tl{font-size:12px;opacity:.8;text-transform:uppercase;letter-spacing:.03em;}
   .total-box .tv{font-family:'Space Grotesk';font-weight:700;font-size:21px;}
+  .photo-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+  .photo-thumb{position:relative;width:72px;height:72px;border-radius:10px;overflow:hidden;border:1.5px solid var(--line);flex-shrink:0;}
+  .photo-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .photo-thumb button{position:absolute;top:2px;right:2px;background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:11px;line-height:1;cursor:pointer;}
+  .photo-grid-modal{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .photo-grid-modal img{width:100%;border-radius:10px;display:block;cursor:pointer;}
 
   .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:11px;padding:13px 18px;font-weight:700;font-size:14.5px;width:100%;}
   .btn-primary{background:var(--ink);color:#fff;}
@@ -384,7 +390,10 @@
           <div class="field"><label>Marca</label><input type="text" id="in-marca" placeholder="Nissan"></div>
           <div class="field"><label>Modelo</label><input type="text" id="in-modelo" placeholder="Versa"></div>
         </div>
-        <div class="field"><label>Cliente / Teléfono (opcional)</label><input type="text" id="in-cliente" placeholder="Nombre o teléfono"></div>
+        <div class="row2">
+          <div class="field"><label>Cliente (opcional)</label><input type="text" id="in-cliente" placeholder="Nombre"></div>
+          <div class="field"><label>Teléfono / WhatsApp (opcional)</label><input type="text" id="in-telefono" placeholder="4421234567"></div>
+        </div>
 
         <div class="field">
           <label>Tamaño del vehículo (lavado y aspirado)</label>
@@ -397,6 +406,16 @@
         </div>
 
         <div class="field"><label>Notas (opcional)</label><textarea id="in-notas" rows="2" placeholder="Rayón en puerta, tapetes extra, etc."></textarea></div>
+
+        <div class="field">
+          <label>Fotos del vehículo (evidencia al recibir)</label>
+          <div class="photo-row" id="in-fotos-preview"></div>
+          <label class="btn btn-outline btn-sm" style="width:auto;display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
+            📷 Agregar foto
+            <input type="file" accept="image/*" capture="environment" id="in-fotos-input" multiple style="display:none;">
+          </label>
+          <span class="hint" id="in-fotos-count" style="margin-left:8px;">0/4 fotos</span>
+        </div>
 
         <div class="total-box"><div class="tl">Total estimado</div><div class="tv" id="entrada-total-preview">$0</div></div>
 
@@ -715,7 +734,7 @@
     if(name==='reportes') renderReportes();
     if(name==='config'){ renderConfig(); renderMembershipConfig(); }
     if(name==='entrada'){
-      renderSizeGrid(); renderExtrasSelect(); updateEntradaTotal();
+      renderSizeGrid(); renderExtrasSelect(); updateEntradaTotal(); renderEntradaPhotos();
       if(prefillPlaca){ document.getElementById('in-placa').value = prefillPlaca; prefillPlaca=null; }
     }
     if(name==='membresias'){ checkRenewals(); switchMSub(document.querySelector('.msub-nav button.active')?.dataset.msub || 'panel'); }
@@ -798,12 +817,85 @@
     document.getElementById('entrada-total-preview').textContent = money(base+extrasTotal);
   }
 
+  // ---------- Fotos de evidencia ----------
+  let entradaPhotos = [];
+  const MAX_FOTOS = 4;
+
+  function resizeImageFile(file, maxDim, quality){
+    return new Promise((resolve,reject)=>{
+      const reader = new FileReader();
+      reader.onload = e=>{
+        const img = new Image();
+        img.onload = ()=>{
+          let w=img.width, h=img.height;
+          if(w>h){ if(w>maxDim){ h=Math.round(h*maxDim/w); w=maxDim; } }
+          else { if(h>maxDim){ w=Math.round(w*maxDim/h); h=maxDim; } }
+          const canvas = document.createElement('canvas');
+          canvas.width=w; canvas.height=h;
+          canvas.getContext('2d').drawImage(img,0,0,w,h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.onerror = reject;
+        img.src = e.target.result;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function renderEntradaPhotos(){
+    const box = document.getElementById('in-fotos-preview');
+    box.innerHTML = entradaPhotos.map(p=>`
+      <div class="photo-thumb"><img src="${p.dataUrl}"><button type="button" data-id="${p.id}">✕</button></div>
+    `).join('');
+    document.getElementById('in-fotos-count').textContent = entradaPhotos.length + '/' + MAX_FOTOS + ' fotos';
+    box.querySelectorAll('button').forEach(b=>{
+      b.addEventListener('click', ()=>{ entradaPhotos = entradaPhotos.filter(p=>p.id!==b.dataset.id); renderEntradaPhotos(); });
+    });
+  }
+
+  document.getElementById('in-fotos-input').addEventListener('change', async (e)=>{
+    const files = Array.from(e.target.files||[]);
+    const remaining = MAX_FOTOS - entradaPhotos.length;
+    if(remaining<=0){ showToast('Máximo ' + MAX_FOTOS + ' fotos'); e.target.value=''; return; }
+    for(const f of files.slice(0,remaining)){
+      try{
+        const dataUrl = await resizeImageFile(f, 1000, 0.6);
+        entradaPhotos.push({ id: uidM('ph'), dataUrl });
+      }catch(err){ showToast('No se pudo procesar una foto'); }
+    }
+    renderEntradaPhotos();
+    e.target.value = '';
+  });
+
+  async function saveOrderPhotos(orderId, dataUrls){
+    try{ await window.storage.set('carwash-orderphotos-'+orderId, JSON.stringify(dataUrls)); }
+    catch(e){ showToast('No se pudieron guardar las fotos.'); }
+  }
+  async function loadOrderPhotos(orderId){
+    try{ const r = await window.storage.get('carwash-orderphotos-'+orderId); return r ? JSON.parse(r.value) : []; }
+    catch(e){ return []; }
+  }
+  async function openFotosModal(orderId){
+    const o = orders.find(x=>x.id===orderId);
+    openModal(`<h3>Fotos de recepción</h3><p class="hint">Cargando...</p>`);
+    const fotos = await loadOrderPhotos(orderId);
+    openModal(`
+      <h3>Fotos de recepción · ${o?escapeHtml(o.placa):''}</h3>
+      <p class="hint">Folio #${o?o.folio:''} ${o?'· '+fmtDate(o.entrada)+' '+fmtTime(o.entrada):''}</p>
+      ${fotos.length ? `<div class="photo-grid-modal">${fotos.map(f=>`<img src="${f}">`).join('')}</div>` : '<div class="hint">No se encontraron fotos.</div>'}
+      <button class="btn btn-outline" id="fm-cerrar" style="margin-top:14px;">Cerrar</button>
+    `);
+    document.getElementById('fm-cerrar').addEventListener('click', closeModal);
+  }
+
   document.getElementById('btn-registrar-entrada').addEventListener('click', async ()=>{
     const placa = document.getElementById('in-placa').value.trim().toUpperCase();
     const color = document.getElementById('in-color').value.trim();
     const marca = document.getElementById('in-marca').value.trim();
     const modelo = document.getElementById('in-modelo').value.trim();
     const cliente = document.getElementById('in-cliente').value.trim();
+    const telefono = document.getElementById('in-telefono').value.trim();
     const notas = document.getElementById('in-notas').value.trim();
 
     if(!placa){ showToast('Ingresa la placa del vehículo'); return; }
@@ -816,21 +908,25 @@
 
     const order = {
       id: uid(), folio: nextFolio(),
-      placa, color, marca, modelo, cliente, notas,
+      placa, color, marca, modelo, cliente, telefono, notas,
       sizeId: size.id, sizeName: size.name, basePrice: size.price,
       extras: chosenExtras, extrasTotal,
       price: size.price + extrasTotal,
       liters: size.liters + extrasLiters,
       entrada: new Date().toISOString(), salida: null,
-      estado: 'en_proceso', pagado: false, metodoPago: null
+      estado: 'en_proceso', pagado: false, metodoPago: null,
+      tieneFotos: entradaPhotos.length>0
     };
     orders.unshift(order);
     await saveOrders();
-    showToast('Entrada registrada · Folio #' + order.folio);
+    if(entradaPhotos.length){ await saveOrderPhotos(order.id, entradaPhotos.map(p=>p.dataUrl)); }
+    if(telefono){ queueOrderMessage(order, 'recibido', tplRecibidoNormal(order)); }
+    showToast('Entrada registrada · Folio #' + order.folio + (telefono ? ' · mensaje listo en Recordatorios' : ''));
 
-    ['in-placa','in-color','in-marca','in-modelo','in-cliente','in-notas'].forEach(id=>document.getElementById(id).value='');
+    ['in-placa','in-color','in-marca','in-modelo','in-cliente','in-telefono','in-notas'].forEach(id=>document.getElementById(id).value='');
     selectedExtraIds = new Set();
-    renderExtrasSelect(); updateEntradaTotal();
+    entradaPhotos = [];
+    renderExtrasSelect(); updateEntradaTotal(); renderEntradaPhotos();
 
     printEntradaTicket(order.id);
     switchTab('proceso');
@@ -856,7 +952,13 @@
     } else if(o.estado==='terminado'){
       actions += `<button class="btn btn-primary btn-sm" data-action="entregar" data-id="${o.id}">Entregar y cobrar</button>`;
     }
+    if(o.telefono && o.estado!=='entregado'){
+      actions += `<a class="btn btn-amber btn-sm" href="${waLink(o.telefono, tplListoNormal(o))}" target="_blank" rel="noopener">Avisar: listo por WhatsApp</a>`;
+    }
     actions += `<button class="btn btn-outline btn-sm" data-action="reimprimir" data-id="${o.id}">Reimprimir ticket</button>`;
+    if(o.tieneFotos){
+      actions += `<button class="btn btn-outline btn-sm" data-action="ver-fotos" data-id="${o.id}">📷 Ver fotos</button>`;
+    }
     if(o.estado==='entregado' && o.pagado){
       actions += `<button class="btn btn-amber btn-sm" data-action="sello" data-id="${o.id}">Reimprimir sello pagado</button>`;
     }
@@ -895,12 +997,15 @@
     });
     container.querySelectorAll('[data-action="entregar"]').forEach(btn=>btn.addEventListener('click', ()=>openEntregaModal(btn.dataset.id)));
     container.querySelectorAll('[data-action="reimprimir"]').forEach(btn=>btn.addEventListener('click', ()=>printEntradaTicket(btn.dataset.id)));
+    container.querySelectorAll('[data-action="ver-fotos"]').forEach(btn=>btn.addEventListener('click', ()=>openFotosModal(btn.dataset.id)));
     container.querySelectorAll('[data-action="sello"]').forEach(btn=>btn.addEventListener('click', ()=>printPagadoStamp(btn.dataset.id)));
     container.querySelectorAll('[data-action="eliminar"]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         if(!confirm('¿Eliminar este registro?')) return;
+        const wasPhoto = orders.find(x=>x.id===btn.dataset.id && x.tieneFotos);
         orders = orders.filter(x=>x.id!==btn.dataset.id);
         await saveOrders(); renderHistorial(); renderProceso();
+        if(wasPhoto){ try{ await window.storage.delete('carwash-orderphotos-'+btn.dataset.id); }catch(e){} }
       });
     });
   }
@@ -1185,7 +1290,13 @@
   function queueMessage(clientId, tipo, mensaje){
     const c = clients.find(x=>x.id===clientId);
     if(!c) return;
-    messages.unshift({ id:uidM('msg'), clientId, tipo, mensaje, telefono:c.telefono, fecha:new Date().toISOString(), estado:'pendiente' });
+    messages.unshift({ id:uidM('msg'), clientId, nombre:c.nombre, tipo, mensaje, telefono:c.telefono, fecha:new Date().toISOString(), estado:'pendiente' });
+    saveMessages();
+    refreshMemDot();
+  }
+  function queueOrderMessage(order, tipo, mensaje){
+    if(!order.telefono) return;
+    messages.unshift({ id:uidM('msg'), clientId:null, orderId:order.id, nombre:order.cliente||order.placa, tipo, mensaje, telefono:order.telefono, fecha:new Date().toISOString(), estado:'pendiente' });
     saveMessages();
     refreshMemDot();
   }
@@ -1195,16 +1306,23 @@
   function tplAvisoRenovacion(c,m){ return `${c.nombre}, tu membresía se renueva el ${fmtDateShort(m.fechaRenovacion)} (${money(m.precioFinal)}). Aún tienes ${m.lavadasDisponibles} lavadas disponibles este mes.`; }
   function tplCobroExitoso(c,m){ return `${c.nombre}, tu pago mensual de ${money(m.precioFinal)} en ${business.nombre} fue procesado con éxito. Tu membresía sigue activa con 5 lavadas nuevas disponibles. ¡Gracias!`; }
   function tplPagoRechazado(c,m){ return `${c.nombre}, no pudimos procesar el cobro de tu membresía (${money(m.precioFinal)}) en ${business.nombre}. Por favor actualiza tu método de pago o contáctanos para evitar la suspensión.`; }
+  function tplRecibidoNormal(o){
+    const extrasTxt = o.extras && o.extras.length ? ` + ${o.extras.map(x=>x.name).join(', ')}` : '';
+    return `Hola${o.cliente?' '+o.cliente:''}! En ${business.nombre} recibimos tu auto (placa ${o.placa}) para ${o.sizeName}${extrasTxt}. Folio #${o.folio}. Te avisamos en cuanto esté listo. ¡Gracias por tu preferencia!`;
+  }
+  function tplListoNormal(o){
+    return `${o.cliente?o.cliente+', tu':'Tu'} auto (placa ${o.placa}, folio #${o.folio}) ya está listo para recoger en ${business.nombre}. ¡Te esperamos!`;
+  }
 
   function renderMensajes(){
     const list = document.getElementById('mem-mensajes-list');
     const pendientes = messages.filter(m=>m.estado==='pendiente');
     if(!pendientes.length){ list.innerHTML = `<div class="empty"><div class="icon">✅</div>No hay mensajes pendientes por enviar.</div>`; refreshMemDot(); return; }
     list.innerHTML = pendientes.map(m=>{
-      const c = clients.find(x=>x.id===m.clientId);
+      const nombre = m.nombre || (clients.find(x=>x.id===m.clientId)||{}).nombre || 'Cliente';
       return `
         <div class="msg-item">
-          <div class="mt">${labelTipoMensaje(m.tipo)} · ${escapeHtml(c?c.nombre:'Cliente')}</div>
+          <div class="mt">${labelTipoMensaje(m.tipo)} · ${escapeHtml(nombre)}</div>
           <div class="mb">${escapeHtml(m.mensaje)}</div>
           <div class="ma">
             <a class="btn btn-secondary btn-sm" href="${waLink(m.telefono,m.mensaje)}" target="_blank" rel="noopener" data-action="marcar-enviado" data-id="${m.id}">Enviar por WhatsApp</a>
@@ -1228,7 +1346,8 @@
   }
   function labelTipoMensaje(t){
     return { bienvenida:'Bienvenida', confirmacion_lavada:'Confirmación de lavada', dos_lavadas:'2 lavadas restantes',
-      aviso_renovacion:'Aviso de renovación', cobro_exitoso:'Cobro exitoso', pago_rechazado:'Pago rechazado' }[t] || t;
+      aviso_renovacion:'Aviso de renovación', cobro_exitoso:'Cobro exitoso', pago_rechazado:'Pago rechazado',
+      recibido:'Auto recibido', listo:'Auto listo' }[t] || t;
   }
   function refreshMemDot(){
     const pend = messages.filter(m=>m.estado==='pendiente').length;
@@ -1825,7 +1944,7 @@
     await loadAll();
     applyTheme();
     tickClock(); setInterval(tickClock, 30000);
-    renderSizeGrid(); renderExtrasSelect(); updateEntradaTotal();
+    renderSizeGrid(); renderExtrasSelect(); updateEntradaTotal(); renderEntradaPhotos();
     renderConfig(); renderMembershipConfig();
     refreshGlobalAlert();
     checkRenewals(); refreshMemDot();
