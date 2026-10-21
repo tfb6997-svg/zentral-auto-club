@@ -421,19 +421,6 @@
 
     <!-- ENTRADA -->
     <section class="view active" id="view-entrada">
-      <div class="card" id="display-card">
-        <div class="display-top">
-          <div class="d-stat"><div class="dv" id="d-entradas-hoy">0</div><div class="dl">Entradas hoy</div></div>
-          <div class="d-stat"><div class="dv" id="d-lavados-hoy">0</div><div class="dl">Lavados hoy</div></div>
-          <div class="d-stat"><div class="dv" id="d-proceso">0</div><div class="dl">En el lavado</div></div>
-        </div>
-        <table class="d-table">
-          <thead><tr><th>Tamaño</th><th>Hoy</th><th>Mes</th><th>Total</th></tr></thead>
-          <tbody id="d-tbody"></tbody>
-        </table>
-        <div class="hint" id="d-acum" style="margin:10px 0 0;"></div>
-      </div>
-
       <div class="card">
         <h2>Registrar entrada</h2>
         <p class="hint">Captura el vehículo, el tamaño y los extras si aplica.</p>
@@ -490,6 +477,19 @@
 
     <!-- HISTORIAL -->
     <section class="view" id="view-historial">
+      <div class="card" id="display-card">
+        <div class="display-top">
+          <div class="d-stat"><div class="dv" id="d-entradas-hoy">0</div><div class="dl">Entradas hoy</div></div>
+          <div class="d-stat"><div class="dv" id="d-lavados-hoy">0</div><div class="dl">Lavados hoy</div></div>
+          <div class="d-stat"><div class="dv" id="d-proceso">0</div><div class="dl">En el lavado</div></div>
+        </div>
+        <table class="d-table">
+          <thead><tr><th>Tamaño</th><th>Hoy</th><th>Mes</th><th>Total</th></tr></thead>
+          <tbody id="d-tbody"></tbody>
+        </table>
+        <div class="hint" id="d-acum" style="margin:10px 0 0;"></div>
+      </div>
+
       <div class="card">
         <h2>Historial</h2>
         <div class="filter-row">
@@ -553,6 +553,14 @@
         <h2>Corte de caja</h2>
         <p class="hint">Cobros y salidas del día. Cambia la fecha para ver cortes anteriores.</p>
         <div class="field"><label>Fecha</label><input type="date" id="caja-fecha"></div>
+        <div class="field"><label>Fondo inicial de caja (efectivo con el que inicia el día)</label>
+          <input type="number" id="caja-fondo" min="0" inputmode="decimal" placeholder="$ 0.00"
+                 style="width:100%;font-size:30px;font-weight:700;padding:14px 16px;text-align:right;font-family:'Space Grotesk',system-ui,sans-serif;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;">
+            <div class="hint" id="caja-fondo-estado" style="margin:0;"></div>
+            <button class="btn btn-secondary btn-sm" id="btn-guardar-fondo" type="button">Guardar</button>
+          </div>
+        </div>
         <div id="caja-resumen"></div>
         <button class="btn btn-primary" id="btn-imprimir-corte" style="margin-top:12px;">Imprimir corte</button>
       </div>
@@ -699,6 +707,7 @@
   let selectedExtraIds = new Set();
   let currentFilter = { fecha:'', estado:'' };
   let expenses = [];
+  let cajaFondos = {};   // { 'YYYY-MM-DD': monto con el que inicia la caja ese día }
   let registrandoEntrada = false;
   const washLocks = new Set();
 
@@ -753,6 +762,7 @@
     try{ const b = await window.storage.get('carwash:business'); business = b?JSON.parse(b.value):business; }catch(e){}
     try{ const c = await window.storage.get('carwash:cistern'); cistern = c?JSON.parse(c.value):cistern; }catch(e){}
     try{ const f = await window.storage.get('carwash:folio'); folioCounter = f?JSON.parse(f.value):1; }catch(e){ folioCounter=1; }
+    try{ const cf = await window.storage.get('carwash:cajafondos'); cajaFondos = cf?JSON.parse(cf.value):{}; }catch(e){ cajaFondos={}; }
     try{ const ex = await window.storage.get('carwash:expenses'); expenses = ex?JSON.parse(ex.value):[]; }catch(e){ expenses=[]; }
     if(!sizes.length) sizes = DEFAULT_SIZES.slice();
     if(!extrasCatalog.length) extrasCatalog = DEFAULT_EXTRAS.slice();
@@ -777,6 +787,7 @@
       await window.storage.set('carwash:orders', json);
     }catch(e){ showToast('No se pudo guardar.'); }
   }
+  async function saveCajaFondos(){ try{ await window.storage.set('carwash:cajafondos', JSON.stringify(cajaFondos)); }catch(e){ showToast('No se pudo guardar el fondo.'); } }
   async function saveExpenses(){ try{ await window.storage.set('carwash:expenses', JSON.stringify(expenses)); }catch(e){ showToast('No se pudo guardar la salida.'); } }
   async function saveSizes(){ try{ await window.storage.set('carwash:sizes', JSON.stringify(sizes)); }catch(e){} }
   async function saveExtras(){ try{ await window.storage.set('carwash:extras', JSON.stringify(extrasCatalog)); }catch(e){} }
@@ -825,7 +836,7 @@
     document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
     document.querySelectorAll('section.view').forEach(s=>s.classList.toggle('active', s.id==='view-'+name));
     if(name==='proceso') renderProceso();
-    if(name==='historial') renderHistorial();
+    if(name==='historial'){ renderDisplay(); renderHistorial(); }
     if(name==='reportes') renderReportes();
     if(name==='caja'){
       const fi = document.getElementById('caja-fecha');
@@ -1006,7 +1017,8 @@
     if(!size){ showToast('Selecciona el tamaño del vehículo'); return; }
 
     // Anti-duplicados: misma placa ya registrada
-    const dup = orders.find(o=>o.placa===placa && o.estado!=='entregado');
+    const hoyKey = todayStr();
+    const dup = orders.find(o=>o.placa===placa && o.estado!=='entregado' && dayKey(o.entrada)===hoyKey);
     if(dup){
       const edad = Date.now() - new Date(dup.entrada).getTime();
       if(edad < 120000){
@@ -1055,8 +1067,34 @@
     }
   });
 
+  // ---------- AUTO-TERMINAR Y COBRAR EN EFECTIVO (1 hora después de la entrada) ----------
+  const AUTO_TERMINAR_MS = 60*60*1000;
+  function autoTerminarVencidos(){
+    const now = Date.now(); let changed = false;
+    orders.forEach(o=>{
+      if(o.estado==='en_proceso'){
+        const lim = new Date(o.entrada).getTime() + AUTO_TERMINAR_MS;
+        if(now >= lim){
+          // Si nadie lo marcó: se da por terminado y cobrado en EFECTIVO (se puede cambiar en Caja al cerrar el día)
+          const iso = new Date(lim).toISOString();
+          o.terminadoAt = iso;
+          o.estado='entregado'; o.pagado=true; o.metodoPago='efectivo';
+          o.salida = iso; o.autoTerminado = true; o.autoCobro = true;
+          cistern.nivel = Math.max(0, cistern.nivel - (o.liters||0));
+          changed = true;
+        }
+      }
+    });
+    if(changed){
+      saveOrders(); saveCistern(); refreshGlobalAlert(); renderDisplay();
+      if(document.getElementById('view-proceso')?.classList.contains('active')) renderProceso();
+    }
+    return changed;
+  }
+
   // ---------- EN PROCESO ----------
   function renderProceso(){
+    autoTerminarVencidos();
     const list = document.getElementById('proceso-list');
     const activos = orders.filter(o=>o.estado!=='entregado');
     if(!activos.length){ list.innerHTML = `<div class="empty"><div class="icon">🚗</div>Sin autos en proceso ahora mismo.</div>`; return; }
@@ -1078,12 +1116,13 @@
     if(o.telefono && o.estado!=='entregado'){
       actions += `<a class="btn btn-amber btn-sm" href="${waLink(o.telefono, tplListoNormal(o))}" target="_blank" rel="noopener">Avisar: listo por WhatsApp</a>`;
     }
+    actions += `<button class="btn btn-outline btn-sm" data-action="editar" data-id="${o.id}">✏️ Editar paquete</button>`;
     actions += `<button class="btn btn-outline btn-sm" data-action="reimprimir" data-id="${o.id}">Reimprimir ticket</button>`;
     if(o.tieneFotos){
       actions += `<button class="btn btn-outline btn-sm" data-action="ver-fotos" data-id="${o.id}">📷 Ver fotos</button>`;
     }
     if(o.estado==='entregado' && o.pagado){
-      actions += `<button class="btn btn-amber btn-sm" data-action="sello" data-id="${o.id}">Reimprimir sello pagado</button>`;
+      actions += `<button class="btn btn-amber btn-sm" data-action="sello" data-id="${o.id}">Reimprimir ticket pagado</button>`;
     }
     if(showDelete){
       actions += `<button class="btn btn-danger btn-sm" data-action="eliminar" data-id="${o.id}">Eliminar</button>`;
@@ -1104,12 +1143,68 @@
           <div>${o.liters} L</div>
           <div>Entrada ${fmtTime(o.entrada)}</div>
           ${o.salida ? `<div>Salida ${fmtTime(o.salida)}</div>` : ''}
-          ${o.pagado && o.metodoPago ? `<div><b>${escapeHtml(o.metodoPago)}</b></div>` : ''}
+          ${o.pagado && o.metodoPago ? `<div><b>${escapeHtml(o.metodoPago)}</b>${o.autoCobro?' (auto)':''}</div>` : ''}
         </div>
         ${extrasLine}
         <div class="order-actions">${actions}</div>
       </div>
     `;
+  }
+
+  // ---------- EDITAR PAQUETE DE UNA ENTRADA YA REGISTRADA ----------
+  function openEditarOrdenModal(id){
+    const o = orders.find(x=>x.id===id); if(!o) return;
+    let selSize = o.sizeId, selExtras = new Set((o.extras||[]).map(x=>x.id));
+    const calc = ()=>{
+      const sz = sizes.find(z=>z.id===selSize);
+      const base = sz ? sz.price : o.basePrice;
+      const ext = extrasCatalog.filter(x=>selExtras.has(x.id));
+      // extras que ya tenía y ya no están en el catálogo se conservan
+      const viejos = (o.extras||[]).filter(x=>selExtras.has(x.id) && !extrasCatalog.find(c=>c.id===x.id));
+      const extras = ext.map(x=>({id:x.id,name:x.name,price:x.price,liters:x.liters||0})).concat(viejos);
+      const extrasTotal = extras.reduce((s,x)=>s+x.price,0);
+      return { sz, base, extras, extrasTotal, total: base+extrasTotal };
+    };
+    const draw = ()=>{
+      const c = calc();
+      document.getElementById('ed-sizes').innerHTML = sizes.map(z=>`<div class="size-option ${z.id===selSize?'selected':''}" data-id="${z.id}"><div class="pname">${escapeHtml(z.name)}</div><div class="pprice">${money(z.price)}</div></div>`).join('');
+      const todos = extrasCatalog.concat((o.extras||[]).filter(x=>!extrasCatalog.find(c2=>c2.id===x.id)));
+      document.getElementById('ed-extras').innerHTML = todos.map(x=>`<div class="extra-chip ${selExtras.has(x.id)?'selected':''}" data-id="${x.id}"><div class="extra-row-flex"><span class="check">${selExtras.has(x.id)?'✓':''}</span><span class="en">${escapeHtml(x.name)}</span></div><span class="ep">+${money(x.price)}</span></div>`).join('');
+      document.getElementById('ed-total').value = c.total;
+      document.querySelectorAll('#ed-sizes .size-option').forEach(el=>el.addEventListener('click', ()=>{ selSize = el.dataset.id; draw(); }));
+      document.querySelectorAll('#ed-extras .extra-chip').forEach(el=>el.addEventListener('click', ()=>{ const i=el.dataset.id; if(selExtras.has(i)) selExtras.delete(i); else selExtras.add(i); draw(); }));
+    };
+    openModal(`
+      <h3>Editar paquete · ${escapeHtml(o.placa)} <span class="mono" style="font-size:12px;color:var(--muted);">#${o.folio}</span></h3>
+      ${o.estado==='entregado' ? '<p class="hint" style="color:var(--red);">Este auto ya se cobró: al cambiar el total cambiará también el corte de ese día.</p>' : ''}
+      <div class="field"><label>Tamaño / paquete</label><div class="size-grid" id="ed-sizes"></div></div>
+      <div class="field"><label>Extras</label><div id="ed-extras"></div></div>
+      <div class="field"><label>Total (se recalcula solo; puedes ajustarlo)</label><input type="number" id="ed-total" min="0"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="ed-guardar" style="flex:1;">Guardar cambios</button>
+        <button class="btn btn-secondary" id="ed-guardar-imp" style="flex:1;">Guardar e imprimir ticket</button>
+      </div>
+      <button class="btn btn-outline" id="ed-cancelar" style="width:100%;margin-top:8px;">Cancelar</button>
+    `);
+    draw();
+    document.getElementById('ed-cancelar').addEventListener('click', closeModal);
+    const guardar = (imprimir)=>{
+      const c = calc();
+      if(c.sz){ o.sizeId = c.sz.id; o.sizeName = c.sz.name; o.basePrice = c.sz.price; }
+      o.extras = c.extras; o.extrasTotal = c.extrasTotal;
+      const manual = Number(document.getElementById('ed-total').value);
+      o.price = isNaN(manual) ? c.total : manual;
+      o.liters = (c.sz ? c.sz.liters : 0) + c.extras.reduce((s,x)=>s+(x.liters||0),0);
+      o.editadoAt = new Date().toISOString();
+      saveOrders(); closeModal();
+      renderProceso(); renderDisplay();
+      if(document.getElementById('view-historial').classList.contains('active')) renderHistorial();
+      if(document.getElementById('view-caja').classList.contains('active')) renderCaja();
+      showToast('Paquete actualizado · Folio #'+o.folio);
+      if(imprimir) (o.estado==='entregado' && o.pagado) ? printPagadoStamp(o.id) : printEntradaTicket(o.id);
+    };
+    document.getElementById('ed-guardar').addEventListener('click', ()=>guardar(false));
+    document.getElementById('ed-guardar-imp').addEventListener('click', ()=>guardar(true));
   }
 
   function bindOrderActions(container){
@@ -1121,6 +1216,7 @@
         saveOrders(); renderProceso(); renderDisplay(); showToast('Marcado como terminado');
       });
     });
+    container.querySelectorAll('[data-action="editar"]').forEach(btn=>btn.addEventListener('click', ()=>openEditarOrdenModal(btn.dataset.id)));
     container.querySelectorAll('[data-action="entregar"]').forEach(btn=>btn.addEventListener('click', ()=>openEntregaModal(btn.dataset.id)));
     container.querySelectorAll('[data-action="reimprimir"]').forEach(btn=>btn.addEventListener('click', ()=>printEntradaTicket(btn.dataset.id)));
     container.querySelectorAll('[data-action="ver-fotos"]').forEach(btn=>btn.addEventListener('click', ()=>openFotosModal(btn.dataset.id)));
@@ -1149,9 +1245,9 @@
         </div>
       </div>
       <div class="field"><label>Total a cobrar</label><input type="number" id="modal-total" value="${o.price}" min="0"></div>
-      <p class="hint">Se descontarán los litros de la cisterna y se imprimirá el sello de PAGADO (no un ticket nuevo).</p>
+      <p class="hint">Se descontarán los litros de la cisterna y se imprimirá el ticket completo con el sello de PAGADO.</p>
       <div class="btn-row">
-        <button class="btn btn-primary" id="modal-confirmar" style="flex:1;">Cobrar e imprimir sello</button>
+        <button class="btn btn-primary" id="modal-confirmar" style="flex:1;">Cobrar e imprimir ticket pagado</button>
         <button class="btn btn-outline" id="modal-cancelar" style="flex:1;">Cancelar</button>
       </div>
     `);
@@ -2091,7 +2187,7 @@
         const k = by[o.metodoPago] ? o.metodoPago : 'otro';
         const monto = Number(o.price||0);
         by[k].n++; by[k].t += monto; autos++;
-        lista.push({ hora:o.salida, titulo:'#'+o.folio+' · '+o.placa, detalle:(o.sizeName||'')+(o.extras&&o.extras.length?' + '+o.extras.length+' extra(s)':''), metodo:k, monto });
+        lista.push({ orderId:o.id, auto:!!o.autoCobro, hora:o.salida, titulo:'#'+o.folio+' · '+o.placa, detalle:(o.sizeName||'')+(o.extras&&o.extras.length?' + '+o.extras.length+' extra(s)':''), metodo:k, monto });
       }
     });
     detailingLog.forEach(dt=>{
@@ -2119,8 +2215,9 @@
     const salidasTotal = salidas.reduce((s,e)=>s+Number(e.monto||0),0);
     const salidasEfectivo = salidas.filter(e=>e.metodo==='efectivo').reduce((s,e)=>s+Number(e.monto||0),0);
     const ingresos = by.efectivo.t + by.tarjeta.t + by.transferencia.t + by.otro.t + memT;
-    return { by, memN, memT, salidas, salidasTotal, salidasEfectivo, ingresos,
-             efectivoCaja: by.efectivo.t - salidasEfectivo, neto: ingresos - salidasTotal, autos, lista };
+    const fondo = Number(cajaFondos[fecha]||0);
+    return { by, memN, memT, salidas, salidasTotal, salidasEfectivo, ingresos, fondo,
+             efectivoCaja: fondo + by.efectivo.t - salidasEfectivo, neto: ingresos - salidasTotal, autos, lista };
   }
 
   const METODO_LABEL = { efectivo:'Efectivo', tarjeta:'Tarjeta', transferencia:'Transferencia', otro:'Sin método', membresia:'Membresía' };
@@ -2138,8 +2235,13 @@
     html += line('Total ingresos', money(d.ingresos), 'strong');
     html += line('Salidas de dinero', '− '+money(d.salidasTotal), 'minus', d.salidas.length+' registro(s)');
     html += line('Neto del día', money(d.neto), 'strong');
-    html += `<div class="corte-box"><div><div class="tl">Efectivo que debe haber en caja</div><div style="font-size:11px;opacity:.7;margin-top:2px;">cobros en efectivo − salidas en efectivo</div></div><div class="tv">${money(d.efectivoCaja)}</div></div>`;
+    html += line('Fondo inicial de caja', money(d.fondo));
+    html += `<div class="corte-box"><div><div class="tl">Efectivo que debe haber en caja</div><div style="font-size:11px;opacity:.7;margin-top:2px;">fondo inicial + cobros en efectivo − salidas en efectivo</div></div><div class="tv">${money(d.efectivoCaja)}</div></div>`;
     document.getElementById('caja-resumen').innerHTML = html;
+    const fi = document.getElementById('caja-fondo'); if(document.activeElement!==fi) fi.value = cajaFondos[fecha] ? cajaFondos[fecha] : '';
+    const fe = document.getElementById('caja-fondo-estado'), fb = document.getElementById('btn-guardar-fondo');
+    if(cajaFondos[fecha]){ fe.textContent = '✓ Registrado: '+money(cajaFondos[fecha])+' · puedes cambiarlo y pulsar Actualizar'; fe.style.color='var(--green, #16a34a)'; fb.textContent='Actualizar'; }
+    else { fe.textContent = 'Sin fondo registrado para este día'; fe.style.color=''; fb.textContent='Guardar'; }
 
     const salBox = document.getElementById('caja-salidas');
     salBox.innerHTML = d.salidas.length ? d.salidas.map(e=>`
@@ -2157,14 +2259,35 @@
       saveExpenses(); renderCaja();
     }));
 
-    document.getElementById('caja-cobros').innerHTML = d.lista.length ? d.lista.map(x=>`
-      <div class="corte-line">
-        <div>${escapeHtml(x.titulo)}<div class="cl-sub">${escapeHtml(x.detalle||'')} · ${escapeHtml(METODO_LABEL[x.metodo]||'')} · ${fmtTime(x.hora)}</div></div>
+    const cobros = document.getElementById('caja-cobros');
+    cobros.innerHTML = d.lista.length ? d.lista.map(x=>`
+      <div class="corte-line" style="align-items:flex-start;">
+        <div>${escapeHtml(x.titulo)}${x.auto?' <span class="badge badge-nopagado" style="font-size:10px;">cobro automático</span>':''}
+          <div class="cl-sub">${escapeHtml(x.detalle||'')} · ${x.orderId?'':escapeHtml(METODO_LABEL[x.metodo]||'')+' · '}${fmtTime(x.hora)}</div>
+          ${x.orderId ? `<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+            <select data-metodo-order="${x.orderId}" style="padding:5px 8px;font-size:12px;">
+              ${['efectivo','tarjeta','transferencia'].map(m=>`<option value="${m}" ${x.metodo===m?'selected':''}>${METODO_LABEL[m]}</option>`).join('')}
+            </select>
+            <button class="btn btn-outline btn-sm" data-edit-order="${x.orderId}">Editar paquete</button>
+          </div>` : ''}
+        </div>
         <div class="cv"><b>${money(x.monto)}</b></div>
       </div>`).join('') : '<div class="hint">Sin cobros registrados ese día.</div>';
+    cobros.querySelectorAll('[data-metodo-order]').forEach(sel=>sel.addEventListener('change', ()=>{
+      const o = orders.find(z=>z.id===sel.dataset.metodoOrder); if(!o) return;
+      o.metodoPago = sel.value; o.autoCobro = false;
+      saveOrders(); renderCaja(); showToast('Método de pago actualizado');
+    }));
+    cobros.querySelectorAll('[data-edit-order]').forEach(b=>b.addEventListener('click', ()=>openEditarOrdenModal(b.dataset.editOrder)));
   }
 
   document.getElementById('caja-fecha').addEventListener('change', renderCaja);
+  document.getElementById('btn-guardar-fondo').addEventListener('click', ()=>{
+    const f = document.getElementById('caja-fecha').value || todayStr();
+    const v = Number(document.getElementById('caja-fondo').value)||0;
+    if(v>0) cajaFondos[f]=v; else delete cajaFondos[f];
+    saveCajaFondos(); renderCaja(); showToast(v>0 ? 'Fondo inicial registrado: '+money(v) : 'Fondo inicial borrado');
+  });
   document.getElementById('btn-imprimir-corte').addEventListener('click', ()=>{
     printCorte(document.getElementById('caja-fecha').value || todayStr());
   });
@@ -2252,6 +2375,7 @@
       ${L('TOTAL SALIDAS', '-'+money(d.salidasTotal), 'total')}
       <hr>
       ${L('NETO DEL DIA', money(d.neto), 'total')}
+      ${L('Fondo inicial', money(d.fondo))}
       ${L('EFECTIVO EN CAJA', money(d.efectivoCaja), 'total')}
       <hr>
       <div style="margin-top:22px;">Entrega: ____________________</div>
@@ -2307,6 +2431,7 @@
   function printEntradaTicket(id){
     const o = orders.find(x=>x.id===id);
     if(!o) return;
+    if(o.estado==='entregado' && o.pagado){ printPagadoStamp(id); return; }
     const body = document.getElementById('ticket-body');
     body.innerHTML = `
       ${ticketHeader(o)}
@@ -2324,15 +2449,13 @@
     if(!o) return;
     const body = document.getElementById('ticket-body');
     body.innerHTML = `
-      <div class="center biz-name">${escapeHtml(business.nombre||'ZENTRAL AUTO CLUB')}</div>
-      <hr>
-      <div class="line"><span>Folio</span><span>#${o.folio}</span></div>
-      <div class="line"><span>Placa</span><span>${escapeHtml(o.placa)}</span></div>
-      <div class="line"><span>Fecha</span><span>${fmtDate(o.salida||o.entrada)}</span></div>
-      <div class="line"><span>Hora</span><span>${o.salida?fmtTime(o.salida):'--'}</span></div>
-      <div class="line"><span>Pago</span><span>${o.metodoPago||'--'}</span></div>
-      <div class="line total"><span>TOTAL</span><span>${money(o.price)}</span></div>
+      ${ticketHeader(o)}
+      ${o.salida ? `<div class="line"><span>Salida</span><span>${fmtTime(o.salida)}</span></div>` : ''}
+      <div class="line"><span>Forma de pago</span><span>${escapeHtml(o.metodoPago||'--')}</span></div>
       <div class="stamp">PAGADO</div>
+      <hr>
+      ${business.legal ? `<div class="legal">${escapeHtml(business.legal)}</div>` : ''}
+      <hr>
       <div class="center">Gracias por su preferencia</div>
     `;
     setTimeout(()=>window.print(), 100);
@@ -2342,7 +2465,8 @@
   async function init(){
     await loadAll();
     applyTheme();
-    tickClock(); setInterval(tickClock, 30000);
+    autoTerminarVencidos();
+    tickClock(); setInterval(tickClock, 30000); setInterval(autoTerminarVencidos, 30000);
     renderSizeGrid(); renderExtrasSelect(); updateEntradaTotal(); renderEntradaPhotos();
     renderConfig(); renderMembershipConfig();
     refreshGlobalAlert();
