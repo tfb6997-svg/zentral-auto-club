@@ -21,6 +21,11 @@
   };
   firebase.initializeApp(firebaseConfig);
   const db = firebase.firestore();
+  // Guarda una copia local: si se va el internet, las capturas se quedan en el dispositivo
+  // y se suben solas cuando regresa la conexión.
+  db.enablePersistence({ synchronizeTabs:true }).catch(()=>{});
+  window.__pendingWrites = 0;
+  function __notifySync(){ window.dispatchEvent(new Event('sync-change')); }
 
   // authReady se resuelve la primera vez que hay una sesión activa (login exitoso)
   let resolveAuthReady;
@@ -37,7 +42,12 @@
     },
     async set(key, value, shared){
       await authReady;
-      await db.collection('carwash_data').doc(key).set({ value, updated: Date.now() });
+      window.__pendingWrites++; __notifySync();
+      try{
+        await db.collection('carwash_data').doc(key).set({ value, updated: Date.now() });
+      } finally {
+        window.__pendingWrites--; __notifySync();
+      }
       return { key, value, shared: !!shared };
     },
     async delete(key, shared){
@@ -173,6 +183,37 @@
   .total-box{display:flex;justify-content:space-between;align-items:center;background:var(--ink);color:#fff;border-radius:12px;padding:14px 16px;margin:14px 0;}
   .total-box .tl{font-size:12px;opacity:.8;text-transform:uppercase;letter-spacing:.03em;}
   .total-box .tv{font-family:'Space Grotesk';font-weight:700;font-size:21px;}
+  /* Display de conteo */
+  .display-top{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;}
+  .d-stat{background:var(--ink);color:#fff;border-radius:12px;padding:12px 8px;text-align:center;}
+  [data-theme="dark"] .d-stat{background:#1B2E32;}
+  .d-stat .dv{font-family:'Space Grotesk';font-weight:700;font-size:26px;line-height:1.1;}
+  .d-stat .dl{font-size:10.5px;opacity:.8;text-transform:uppercase;letter-spacing:.03em;margin-top:3px;}
+  .d-table{width:100%;border-collapse:collapse;font-size:13.5px;}
+  .d-table th{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;text-align:right;padding:4px 6px;}
+  .d-table th:first-child,.d-table td:first-child{text-align:left;}
+  .d-table td{text-align:right;padding:8px 6px;border-top:1px solid var(--line);font-family:'JetBrains Mono',monospace;}
+  .d-table td:first-child{font-family:'Inter',sans-serif;font-weight:600;}
+  .d-table tr.d-total td{font-weight:700;border-top:2px solid var(--ink);}
+
+  /* Indicador de conexión */
+  .sync-badge{display:none;font-size:11px;font-weight:700;padding:5px 10px;border-radius:20px;white-space:nowrap;}
+  .sync-badge.off{display:inline-block;background:var(--red);color:#fff;}
+  .sync-badge.pend{display:inline-block;background:var(--amber);color:#3A2705;}
+
+  /* Caja */
+  .corte-line{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px dashed var(--line);font-size:14px;}
+  .corte-line .cl-sub{font-size:11.5px;color:var(--muted);}
+  .corte-line.strong{font-weight:700;font-size:15.5px;}
+  .corte-line.minus .cv{color:var(--red);}
+  .corte-box{background:var(--ink);color:#fff;border-radius:12px;padding:14px 16px;margin-top:12px;display:flex;justify-content:space-between;align-items:center;}
+  [data-theme="dark"] .corte-box{background:#1B2E32;}
+  .corte-box .tl{font-size:12px;opacity:.8;text-transform:uppercase;letter-spacing:.03em;}
+  .corte-box .tv{font-family:'Space Grotesk';font-weight:700;font-size:22px;}
+  .pay-chips{display:flex;gap:8px;margin:6px 0 4px;}
+  .pay-chips button{flex:1;border:1.5px solid var(--line);background:var(--card);color:var(--muted);font-size:13.5px;font-weight:600;padding:13px 6px;border-radius:12px;}
+  .pay-chips button.selected{background:var(--teal);color:#fff;border-color:var(--teal);}
+
   .photo-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
   .photo-thumb{position:relative;width:72px;height:72px;border-radius:10px;overflow:hidden;border:1.5px solid var(--line);flex-shrink:0;}
   .photo-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
@@ -355,6 +396,7 @@
         <div class="brand-sub">Control de operación</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;">
+        <span id="sync-badge" class="sync-badge"></span>
         <div class="clock" id="clock">--</div>
         <button class="theme-toggle" id="btn-theme-toggle" title="Modo oscuro">🌙</button>
         <button class="theme-toggle" id="btn-logout" title="Cerrar sesión">🚪</button>
@@ -368,6 +410,7 @@
     <button data-tab="proceso">En proceso</button>
     <button data-tab="historial">Historial</button>
     <button data-tab="reportes">Reportes<span class="dot"></span></button>
+    <button data-tab="caja">Caja</button>
     <button data-tab="membresias">Membresías<span class="dot" id="mem-dot"></span></button>
     <button data-tab="config">Config</button>
   </nav>
@@ -378,6 +421,19 @@
 
     <!-- ENTRADA -->
     <section class="view active" id="view-entrada">
+      <div class="card" id="display-card">
+        <div class="display-top">
+          <div class="d-stat"><div class="dv" id="d-entradas-hoy">0</div><div class="dl">Entradas hoy</div></div>
+          <div class="d-stat"><div class="dv" id="d-lavados-hoy">0</div><div class="dl">Lavados hoy</div></div>
+          <div class="d-stat"><div class="dv" id="d-proceso">0</div><div class="dl">En el lavado</div></div>
+        </div>
+        <table class="d-table">
+          <thead><tr><th>Tamaño</th><th>Hoy</th><th>Mes</th><th>Total</th></tr></thead>
+          <tbody id="d-tbody"></tbody>
+        </table>
+        <div class="hint" id="d-acum" style="margin:10px 0 0;"></div>
+      </div>
+
       <div class="card">
         <h2>Registrar entrada</h2>
         <p class="hint">Captura el vehículo, el tamaño y los extras si aplica.</p>
@@ -488,6 +544,29 @@
       <div class="card">
         <h2>Tamaños más vendidos</h2>
         <div id="rep-paquetes"></div>
+      </div>
+    </section>
+
+    <!-- CAJA -->
+    <section class="view" id="view-caja">
+      <div class="card">
+        <h2>Corte de caja</h2>
+        <p class="hint">Cobros y salidas del día. Cambia la fecha para ver cortes anteriores.</p>
+        <div class="field"><label>Fecha</label><input type="date" id="caja-fecha"></div>
+        <div id="caja-resumen"></div>
+        <button class="btn btn-primary" id="btn-imprimir-corte" style="margin-top:12px;">Imprimir corte</button>
+      </div>
+
+      <div class="card">
+        <h2>Salidas de dinero</h2>
+        <p class="hint">Materiales para el lavado, pipa de agua, servicios, nómina, lo que sea.</p>
+        <button class="btn btn-secondary" id="btn-nueva-salida">+ Registrar salida de dinero</button>
+        <div id="caja-salidas" style="margin-top:12px;"></div>
+      </div>
+
+      <div class="card">
+        <h2>Cobros del día</h2>
+        <div id="caja-cobros"></div>
       </div>
     </section>
 
@@ -619,6 +698,9 @@
   let selectedSizeId = null;
   let selectedExtraIds = new Set();
   let currentFilter = { fecha:'', estado:'' };
+  let expenses = [];
+  let registrandoEntrada = false;
+  const washLocks = new Set();
 
   // Membresías state
   let clients = [];
@@ -671,6 +753,7 @@
     try{ const b = await window.storage.get('carwash:business'); business = b?JSON.parse(b.value):business; }catch(e){}
     try{ const c = await window.storage.get('carwash:cistern'); cistern = c?JSON.parse(c.value):cistern; }catch(e){}
     try{ const f = await window.storage.get('carwash:folio'); folioCounter = f?JSON.parse(f.value):1; }catch(e){ folioCounter=1; }
+    try{ const ex = await window.storage.get('carwash:expenses'); expenses = ex?JSON.parse(ex.value):[]; }catch(e){ expenses=[]; }
     if(!sizes.length) sizes = DEFAULT_SIZES.slice();
     if(!extrasCatalog.length) extrasCatalog = DEFAULT_EXTRAS.slice();
     if(!business.legal) business.legal = DEFAULT_LEGAL;
@@ -687,7 +770,14 @@
     try{ const t = await window.storage.get('ui:theme'); theme = t?JSON.parse(t.value):'light'; }catch(e){ theme='light'; }
     if(!membershipPricing.length) membershipPricing = DEFAULT_MEMBERSHIP_PRICING.slice();
   }
-  async function saveOrders(){ try{ await window.storage.set('carwash:orders', JSON.stringify(orders)); }catch(e){ showToast('No se pudo guardar.'); } }
+  async function saveOrders(){
+    try{
+      const json = JSON.stringify(orders);
+      if(json.length > 900000){ showToast('⚠️ El historial está casi lleno. Avísale a soporte para archivarlo.'); }
+      await window.storage.set('carwash:orders', json);
+    }catch(e){ showToast('No se pudo guardar.'); }
+  }
+  async function saveExpenses(){ try{ await window.storage.set('carwash:expenses', JSON.stringify(expenses)); }catch(e){ showToast('No se pudo guardar la salida.'); } }
   async function saveSizes(){ try{ await window.storage.set('carwash:sizes', JSON.stringify(sizes)); }catch(e){} }
   async function saveExtras(){ try{ await window.storage.set('carwash:extras', JSON.stringify(extrasCatalog)); }catch(e){} }
   async function saveBusiness(){ try{ await window.storage.set('carwash:business', JSON.stringify(business)); }catch(e){} }
@@ -707,14 +797,19 @@
   function money(n){ return '$' + Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:0,maximumFractionDigits:0}); }
   function fmtTime(iso){ return new Date(iso).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'}); }
   function fmtDate(iso){ return new Date(iso).toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}); }
-  function todayStr(){ return new Date().toISOString().slice(0,10); }
-  function isToday(iso){ return iso.slice(0,10)===todayStr(); }
+  // Fechas en hora LOCAL (antes usaba UTC y después de las 6 pm las ventas caían en "mañana")
+  function dayKey(d){
+    const x = (d instanceof Date) ? d : new Date(d);
+    return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');
+  }
+  function todayStr(){ return dayKey(new Date()); }
+  function isToday(iso){ return dayKey(iso)===todayStr(); }
   function uid(){ return 'o'+Date.now()+Math.random().toString(36).slice(2,7); }
   function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function showToast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2400); }
   function nextFolio(){ const f=folioCounter; folioCounter+=1; saveFolio(); return String(f).padStart(4,'0'); }
-  function addDays(dateStr,n){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); }
-  function addMonths(dateStr,n){ const d=new Date(dateStr+'T00:00:00'); d.setMonth(d.getMonth()+n); return d.toISOString().slice(0,10); }
+  function addDays(dateStr,n){ const d=new Date(dateStr+'T00:00:00'); d.setDate(d.getDate()+n); return dayKey(d); }
+  function addMonths(dateStr,n){ const d=new Date(dateStr+'T00:00:00'); d.setMonth(d.getMonth()+n); return dayKey(d); }
   function daysBetween(a,b){ return Math.round((new Date(b+'T00:00:00')-new Date(a+'T00:00:00'))/86400000); }
   function fmtDateShort(dateStr){ return new Date(dateStr+'T00:00:00').toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'}); }
   function uidM(prefix){ return prefix+Date.now()+Math.random().toString(36).slice(2,7); }
@@ -732,8 +827,14 @@
     if(name==='proceso') renderProceso();
     if(name==='historial') renderHistorial();
     if(name==='reportes') renderReportes();
+    if(name==='caja'){
+      const fi = document.getElementById('caja-fecha');
+      if(!fi.value) fi.value = todayStr();
+      renderCaja();
+    }
     if(name==='config'){ renderConfig(); renderMembershipConfig(); }
     if(name==='entrada'){
+      renderDisplay();
       renderSizeGrid(); renderExtrasSelect(); updateEntradaTotal(); renderEntradaPhotos();
       if(prefillPlaca){ document.getElementById('in-placa').value = prefillPlaca; prefillPlaca=null; }
     }
@@ -889,7 +990,9 @@
     document.getElementById('fm-cerrar').addEventListener('click', closeModal);
   }
 
-  document.getElementById('btn-registrar-entrada').addEventListener('click', async ()=>{
+  document.getElementById('btn-registrar-entrada').addEventListener('click', ()=>{
+    if(registrandoEntrada) return;   // ya se está registrando: ignora el segundo toque
+    const btnReg = document.getElementById('btn-registrar-entrada');
     const placa = document.getElementById('in-placa').value.trim().toUpperCase();
     const color = document.getElementById('in-color').value.trim();
     const marca = document.getElementById('in-marca').value.trim();
@@ -901,6 +1004,20 @@
     if(!placa){ showToast('Ingresa la placa del vehículo'); return; }
     const size = sizes.find(s=>s.id===selectedSizeId);
     if(!size){ showToast('Selecciona el tamaño del vehículo'); return; }
+
+    // Anti-duplicados: misma placa ya registrada
+    const dup = orders.find(o=>o.placa===placa && o.estado!=='entregado');
+    if(dup){
+      const edad = Date.now() - new Date(dup.entrada).getTime();
+      if(edad < 120000){
+        showToast('Esa placa ya se registró hace un momento (folio #'+dup.folio+'). Se evitó el duplicado.');
+        return;
+      }
+      if(!confirm('Ya hay un auto con placa '+placa+' en el lavado (folio #'+dup.folio+', entró a las '+fmtTime(dup.entrada)+').\n\n¿Registrar otra entrada de todos modos?')) return;
+    }
+
+    registrandoEntrada = true; btnReg.disabled = true; btnReg.textContent = 'Guardando…';
+    try{
 
     const chosenExtras = extrasCatalog.filter(x=>selectedExtraIds.has(x.id)).map(x=>({id:x.id,name:x.name,price:x.price,liters:x.liters||0}));
     const extrasTotal = chosenExtras.reduce((s,x)=>s+x.price,0);
@@ -918,18 +1035,24 @@
       tieneFotos: entradaPhotos.length>0
     };
     orders.unshift(order);
-    await saveOrders();
-    if(entradaPhotos.length){ await saveOrderPhotos(order.id, entradaPhotos.map(p=>p.dataUrl)); }
+    // Se guarda sin esperar a la red: con internet lento o sin internet el registro queda
+    // en el dispositivo, el formulario se limpia y no hay motivo para volver a picar el botón.
+    saveOrders();
+    if(entradaPhotos.length){ saveOrderPhotos(order.id, entradaPhotos.map(p=>p.dataUrl)); }
     if(telefono){ queueOrderMessage(order, 'recibido', tplRecibidoNormal(order)); }
     showToast('Entrada registrada · Folio #' + order.folio + (telefono ? ' · mensaje listo en Recordatorios' : ''));
 
     ['in-placa','in-color','in-marca','in-modelo','in-cliente','in-telefono','in-notas'].forEach(id=>document.getElementById(id).value='');
     selectedExtraIds = new Set();
     entradaPhotos = [];
-    renderExtrasSelect(); updateEntradaTotal(); renderEntradaPhotos();
+    renderExtrasSelect(); updateEntradaTotal(); renderEntradaPhotos(); renderDisplay();
 
     printEntradaTicket(order.id);
     switchTab('proceso');
+
+    } finally {
+      registrandoEntrada = false; btnReg.disabled = false; btnReg.textContent = 'Registrar e imprimir ticket de entrada';
+    }
   });
 
   // ---------- EN PROCESO ----------
@@ -981,6 +1104,7 @@
           <div>${o.liters} L</div>
           <div>Entrada ${fmtTime(o.entrada)}</div>
           ${o.salida ? `<div>Salida ${fmtTime(o.salida)}</div>` : ''}
+          ${o.pagado && o.metodoPago ? `<div><b>${escapeHtml(o.metodoPago)}</b></div>` : ''}
         </div>
         ${extrasLine}
         <div class="order-actions">${actions}</div>
@@ -992,7 +1116,9 @@
     container.querySelectorAll('[data-action="terminar"]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         const o = orders.find(x=>x.id===btn.dataset.id);
-        o.estado='terminado'; await saveOrders(); renderProceso(); showToast('Marcado como terminado');
+        if(!o || o.estado!=='en_proceso') return;
+        o.estado='terminado'; o.terminadoAt = new Date().toISOString();
+        saveOrders(); renderProceso(); renderDisplay(); showToast('Marcado como terminado');
       });
     });
     container.querySelectorAll('[data-action="entregar"]').forEach(btn=>btn.addEventListener('click', ()=>openEntregaModal(btn.dataset.id)));
@@ -1015,8 +1141,12 @@
     openModal(`
       <h3>Entregar vehículo</h3>
       <div class="field"><label>Litros de agua reales usados</label><input type="number" id="modal-litros" value="${o.liters}" min="0"></div>
-      <div class="field"><label>Método de pago</label>
-        <select id="modal-pago"><option value="efectivo">Efectivo</option><option value="tarjeta">Tarjeta</option><option value="transferencia">Transferencia</option></select>
+      <div class="field"><label>¿Cómo pagó el cliente?</label>
+        <div class="pay-chips" id="modal-pago-chips" data-sel="efectivo">
+          <button type="button" data-v="efectivo" class="selected">💵 Efectivo</button>
+          <button type="button" data-v="tarjeta">💳 Tarjeta</button>
+          <button type="button" data-v="transferencia">🏦 Transf.</button>
+        </div>
       </div>
       <div class="field"><label>Total a cobrar</label><input type="number" id="modal-total" value="${o.price}" min="0"></div>
       <p class="hint">Se descontarán los litros de la cisterna y se imprimirá el sello de PAGADO (no un ticket nuevo).</p>
@@ -1026,18 +1156,24 @@
       </div>
     `);
     document.getElementById('modal-cancelar').addEventListener('click', closeModal);
-    document.getElementById('modal-confirmar').addEventListener('click', async ()=>{
+    const payBox = document.getElementById('modal-pago-chips');
+    payBox.querySelectorAll('button').forEach(b=>b.addEventListener('click', ()=>{
+      payBox.querySelectorAll('button').forEach(x=>x.classList.remove('selected'));
+      b.classList.add('selected'); payBox.dataset.sel = b.dataset.v;
+    }));
+    document.getElementById('modal-confirmar').addEventListener('click', ()=>{
+      if(o.estado==='entregado') return;   // evita cobrar dos veces con un doble toque
       o.liters = Number(document.getElementById('modal-litros').value)||0;
-      o.metodoPago = document.getElementById('modal-pago').value;
+      o.metodoPago = payBox.dataset.sel || 'efectivo';
       o.price = Number(document.getElementById('modal-total').value)||0;
       o.estado='entregado'; o.pagado=true; o.salida=new Date().toISOString();
-      await saveOrders();
+      saveOrders();
 
       cistern.nivel = Math.max(0, cistern.nivel - o.liters);
-      await saveCistern();
+      saveCistern();
       refreshGlobalAlert();
 
-      closeModal(); renderProceso();
+      closeModal(); renderProceso(); renderDisplay();
       printPagadoStamp(o.id);
       showToast('Entregado y cobrado · Folio #' + o.folio);
     });
@@ -1050,7 +1186,7 @@
   function renderHistorial(){
     const list = document.getElementById('historial-list');
     let items = orders.slice();
-    if(currentFilter.fecha) items = items.filter(o=>o.entrada.slice(0,10)===currentFilter.fecha);
+    if(currentFilter.fecha) items = items.filter(o=>dayKey(o.entrada)===currentFilter.fecha);
     if(currentFilter.estado) items = items.filter(o=>o.estado===currentFilter.estado);
     if(!items.length){ list.innerHTML = `<div class="empty"><div class="icon">📋</div>No hay registros con estos filtros.</div>`; return; }
     list.innerHTML = items.map(o=>orderCardHtml(o, true)).join('');
@@ -1113,7 +1249,7 @@
 
   function renderReportes(){
     renderCisternWidget();
-    const hoy = orders.filter(o=>isToday(o.entrada) && o.estado==='entregado');
+    const hoy = orders.filter(o=>o.estado==='entregado' && isToday(o.salida || o.entrada));
     const todosEntregados = orders.filter(o=>o.estado==='entregado');
 
     // Lavadas de membresía (ya incluidas en el consumo de la cisterna al registrarse)
@@ -1584,19 +1720,34 @@
       <div class="field"><label>Servicio</label><input id="dm-servicio" placeholder="Ej. Encerado, pulido de faros..."></div>
       <div class="field"><label>Precio normal</label><input id="dm-precio" type="number" min="0"></div>
       <p class="hint">Se aplica 10% de descuento por membresía automáticamente.</p>
+      <div class="field"><label>¿Cómo pagó?</label>
+        <div class="pay-chips" id="dm-pago-chips" data-sel="efectivo">
+          <button type="button" data-v="efectivo" class="selected">💵 Efectivo</button>
+          <button type="button" data-v="tarjeta">💳 Tarjeta</button>
+          <button type="button" data-v="transferencia">🏦 Transf.</button>
+        </div>
+      </div>
       <div class="btn-row">
         <button class="btn btn-primary" id="dm-guardar" style="flex:1;">Registrar</button>
         <button class="btn btn-outline" id="dm-cancelar" style="flex:1;">Cancelar</button>
       </div>
     `);
     document.getElementById('dm-cancelar').addEventListener('click', closeModal);
-    document.getElementById('dm-guardar').addEventListener('click', async ()=>{
+    const dmPay = document.getElementById('dm-pago-chips');
+    dmPay.querySelectorAll('button').forEach(b=>b.addEventListener('click', ()=>{
+      dmPay.querySelectorAll('button').forEach(x=>x.classList.remove('selected'));
+      b.classList.add('selected'); dmPay.dataset.sel = b.dataset.v;
+    }));
+    let dmGuardando = false;
+    document.getElementById('dm-guardar').addEventListener('click', ()=>{
+      if(dmGuardando) return;
       const servicio = document.getElementById('dm-servicio').value.trim();
       const precio = Number(document.getElementById('dm-precio').value)||0;
       if(!servicio){ showToast('Describe el servicio'); return; }
+      dmGuardando = true;
       const descuento = Math.round(precio*0.10);
-      detailingLog.unshift({ id:uidM('d'), clientId, servicio, precioNormal:precio, descuento, precioFinal:precio-descuento, fecha:new Date().toISOString() });
-      await saveDetailingLog();
+      detailingLog.unshift({ id:uidM('d'), clientId, servicio, precioNormal:precio, descuento, precioFinal:precio-descuento, fecha:new Date().toISOString(), metodoPago: dmPay.dataset.sel||'efectivo' });
+      saveDetailingLog();
       closeModal(); openClientDetail(clientId); showToast('Detallado registrado');
     });
   }
@@ -1735,26 +1886,31 @@
     });
   }
 
-  async function registrarLavadaMembresia(membershipId){
+  function registrarLavadaMembresia(membershipId){
     const m = memberships.find(x=>x.id===membershipId);
     if(!m || m.lavadasDisponibles<=0) return;
+    // Candado: un doble toque (o mala señal) no descuenta dos lavadas
+    if(washLocks.has(membershipId)){ showToast('Esa lavada ya se registró hace un momento.'); return; }
+    washLocks.add(membershipId);
+    setTimeout(()=>washLocks.delete(membershipId), 8000);
+
     const empChips = document.getElementById('emp-chip-'+membershipId);
     const empleado = empChips ? empChips.dataset.selected : '';
     const obsInput = document.getElementById('obs-'+membershipId);
     const observaciones = obsInput ? obsInput.value.trim() : '';
 
     m.lavadasDisponibles -= 1; m.lavadasUsadas += 1;
-    await saveMemberships();
+    saveMemberships();
 
     const c = clients.find(x=>x.id===m.clientId);
     const v = c ? c.vehiculos.find(x=>x.id===m.vehicleId) : null;
     const litros = litersForTipo(v ? v.tipo : m.tamano);
 
     memberWashLog.unshift({ id:uidM('w'), membershipId, clientId:m.clientId, fecha:new Date().toISOString(), empleado, observaciones, litros });
-    await saveMemberWashLog();
+    saveMemberWashLog();
 
     cistern.nivel = Math.max(0, cistern.nivel - litros);
-    await saveCistern();
+    saveCistern();
     refreshGlobalAlert();
 
     if(c){
@@ -1882,6 +2038,249 @@
     });
   });
 
+  // ================= DISPLAY DE CONTEO (pestaña Entrada) =================
+  function sizeOfWash(w){
+    const m = memberships.find(x=>x.id===w.membershipId);
+    if(!m) return 'Membresía';
+    const c = clients.find(x=>x.id===m.clientId);
+    const v = c ? (c.vehiculos||[]).find(x=>x.id===m.vehicleId) : null;
+    return (v && v.tipo) || m.tamano || 'Membresía';
+  }
+  function computeCounts(){
+    const hoy = todayStr(); const mes = hoy.slice(0,7);
+    const rows = {};
+    const ensure = n => (rows[n] = rows[n] || {hoy:0,mes:0,total:0});
+    sizes.forEach(s=>ensure(s.name));
+    const ent = {hoy:0,mes:0,total:0};
+    const bump = (r,k)=>{ r.total++; if(k.slice(0,7)===mes) r.mes++; if(k===hoy) r.hoy++; };
+    let enProceso = 0;
+    orders.forEach(o=>{
+      bump(ent, dayKey(o.entrada));
+      if(o.estado!=='entregado') enProceso++;
+      if(o.estado!=='en_proceso') bump(ensure(o.sizeName||'Otro'), dayKey(o.terminadoAt || o.salida || o.entrada));
+    });
+    memberWashLog.forEach(w=>{
+      const k = dayKey(w.fecha);
+      bump(ent, k);
+      bump(ensure(sizeOfWash(w)), k);
+    });
+    return { rows, ent, enProceso };
+  }
+  function renderDisplay(){
+    const { rows, ent, enProceso } = computeCounts();
+    const names = Object.keys(rows);
+    const tot = {hoy:0,mes:0,total:0};
+    names.forEach(n=>{ tot.hoy+=rows[n].hoy; tot.mes+=rows[n].mes; tot.total+=rows[n].total; });
+    document.getElementById('d-entradas-hoy').textContent = ent.hoy;
+    document.getElementById('d-lavados-hoy').textContent = tot.hoy;
+    document.getElementById('d-proceso').textContent = enProceso;
+    document.getElementById('d-tbody').innerHTML = names.map(n=>
+      `<tr><td>${escapeHtml(n)}</td><td>${rows[n].hoy}</td><td>${rows[n].mes}</td><td>${rows[n].total}</td></tr>`
+    ).join('') + `<tr class="d-total"><td>Lavados</td><td>${tot.hoy}</td><td>${tot.mes}</td><td>${tot.total}</td></tr>`;
+    document.getElementById('d-acum').textContent =
+      'Entradas acumuladas: ' + ent.mes + ' este mes · ' + ent.total + ' en total (incluye lavadas de membresía).';
+  }
+
+  // ================= CAJA: CORTE DIARIO Y SALIDAS DE DINERO =================
+  function corteData(fecha){
+    const by = { efectivo:{n:0,t:0}, tarjeta:{n:0,t:0}, transferencia:{n:0,t:0}, otro:{n:0,t:0} };
+    const lista = [];
+    let autos = 0;
+    orders.forEach(o=>{
+      if(o.estado==='entregado' && o.pagado && o.salida && dayKey(o.salida)===fecha){
+        const k = by[o.metodoPago] ? o.metodoPago : 'otro';
+        const monto = Number(o.price||0);
+        by[k].n++; by[k].t += monto; autos++;
+        lista.push({ hora:o.salida, titulo:'#'+o.folio+' · '+o.placa, detalle:(o.sizeName||'')+(o.extras&&o.extras.length?' + '+o.extras.length+' extra(s)':''), metodo:k, monto });
+      }
+    });
+    detailingLog.forEach(dt=>{
+      if(dayKey(dt.fecha)===fecha){
+        const k = by[dt.metodoPago] ? dt.metodoPago : 'otro';
+        const c = clients.find(x=>x.id===dt.clientId);
+        const monto = Number(dt.precioFinal||0);
+        by[k].n++; by[k].t += monto;
+        lista.push({ hora:dt.fecha, titulo:'Detallado · '+(c?c.nombre:''), detalle:dt.servicio, metodo:k, monto });
+      }
+    });
+    let memN = 0, memT = 0;
+    memberships.forEach(m=>{
+      (m.historialPagos||[]).forEach(p=>{
+        if(p.estado==='exitoso' && dayKey(p.fecha)===fecha){
+          const c = clients.find(x=>x.id===m.clientId);
+          const monto = Number(p.monto||0);
+          memN++; memT += monto;
+          lista.push({ hora:p.fecha, titulo:'Membresía · '+(c?c.nombre:''), detalle:m.tamano, metodo:'membresia', monto });
+        }
+      });
+    });
+    lista.sort((a,b)=>new Date(b.hora)-new Date(a.hora));
+    const salidas = expenses.filter(e=>dayKey(e.fecha)===fecha).sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+    const salidasTotal = salidas.reduce((s,e)=>s+Number(e.monto||0),0);
+    const salidasEfectivo = salidas.filter(e=>e.metodo==='efectivo').reduce((s,e)=>s+Number(e.monto||0),0);
+    const ingresos = by.efectivo.t + by.tarjeta.t + by.transferencia.t + by.otro.t + memT;
+    return { by, memN, memT, salidas, salidasTotal, salidasEfectivo, ingresos,
+             efectivoCaja: by.efectivo.t - salidasEfectivo, neto: ingresos - salidasTotal, autos, lista };
+  }
+
+  const METODO_LABEL = { efectivo:'Efectivo', tarjeta:'Tarjeta', transferencia:'Transferencia', otro:'Sin método', membresia:'Membresía' };
+
+  function renderCaja(){
+    const fecha = document.getElementById('caja-fecha').value || todayStr();
+    const d = corteData(fecha);
+    const line = (label, val, cls, sub)=>`<div class="corte-line ${cls||''}"><div>${label}${sub?`<div class="cl-sub">${sub}</div>`:''}</div><div class="cv">${val}</div></div>`;
+    let html = '';
+    html += line('💵 Efectivo', money(d.by.efectivo.t), '', d.by.efectivo.n+' cobro(s)');
+    html += line('💳 Tarjeta', money(d.by.tarjeta.t), '', d.by.tarjeta.n+' cobro(s)');
+    html += line('🏦 Transferencia', money(d.by.transferencia.t), '', d.by.transferencia.n+' cobro(s)');
+    if(d.by.otro.n) html += line('Sin método registrado', money(d.by.otro.t), '', d.by.otro.n+' cobro(s)');
+    if(d.memN) html += line('🔁 Membresías (pasarela)', money(d.memT), '', d.memN+' pago(s)');
+    html += line('Total ingresos', money(d.ingresos), 'strong');
+    html += line('Salidas de dinero', '− '+money(d.salidasTotal), 'minus', d.salidas.length+' registro(s)');
+    html += line('Neto del día', money(d.neto), 'strong');
+    html += `<div class="corte-box"><div><div class="tl">Efectivo que debe haber en caja</div><div style="font-size:11px;opacity:.7;margin-top:2px;">cobros en efectivo − salidas en efectivo</div></div><div class="tv">${money(d.efectivoCaja)}</div></div>`;
+    document.getElementById('caja-resumen').innerHTML = html;
+
+    const salBox = document.getElementById('caja-salidas');
+    salBox.innerHTML = d.salidas.length ? d.salidas.map(e=>`
+      <div class="order" style="padding:10px 12px;margin-bottom:6px;">
+        <div class="order-top">
+          <div><b>${escapeHtml(e.concepto)}</b>
+            <div class="order-car">${escapeHtml(e.categoria||'')} · ${escapeHtml(METODO_LABEL[e.metodo]||e.metodo||'')} · ${fmtTime(e.fecha)}${e.nota?' · '+escapeHtml(e.nota):''}</div></div>
+          <b style="color:var(--red);white-space:nowrap;">− ${money(e.monto)}</b>
+        </div>
+        <div class="order-actions"><button class="btn btn-danger btn-sm" data-action="del-salida" data-id="${e.id}">Eliminar</button></div>
+      </div>`).join('') : '<div class="hint">Sin salidas registradas ese día.</div>';
+    salBox.querySelectorAll('[data-action="del-salida"]').forEach(b=>b.addEventListener('click', ()=>{
+      if(!confirm('¿Eliminar esta salida de dinero? Cambiará el corte de ese día.')) return;
+      expenses = expenses.filter(x=>x.id!==b.dataset.id);
+      saveExpenses(); renderCaja();
+    }));
+
+    document.getElementById('caja-cobros').innerHTML = d.lista.length ? d.lista.map(x=>`
+      <div class="corte-line">
+        <div>${escapeHtml(x.titulo)}<div class="cl-sub">${escapeHtml(x.detalle||'')} · ${escapeHtml(METODO_LABEL[x.metodo]||'')} · ${fmtTime(x.hora)}</div></div>
+        <div class="cv"><b>${money(x.monto)}</b></div>
+      </div>`).join('') : '<div class="hint">Sin cobros registrados ese día.</div>';
+  }
+
+  document.getElementById('caja-fecha').addEventListener('change', renderCaja);
+  document.getElementById('btn-imprimir-corte').addEventListener('click', ()=>{
+    printCorte(document.getElementById('caja-fecha').value || todayStr());
+  });
+  document.getElementById('btn-nueva-salida').addEventListener('click', ()=>openSalidaModal());
+
+  function openSalidaModal(){
+    const fechaSel = document.getElementById('caja-fecha').value || todayStr();
+    openModal(`
+      <h3>Registrar salida de dinero</h3>
+      <div class="field"><label>Concepto</label><input id="sa-concepto" placeholder="Ej. Shampoo, microfibras, pipa de agua"></div>
+      <div class="row2">
+        <div class="field"><label>Monto (MXN)</label><input id="sa-monto" type="number" min="0" inputmode="decimal"></div>
+        <div class="field"><label>Categoría</label>
+          <select id="sa-categoria">
+            <option>Materiales de lavado</option><option>Agua (pipa)</option><option>Servicios</option>
+            <option>Nómina / propinas</option><option>Mantenimiento</option><option>Otros</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>¿De dónde salió el dinero?</label>
+        <div class="pay-chips" id="sa-pago-chips" data-sel="efectivo">
+          <button type="button" data-v="efectivo" class="selected">💵 Caja</button>
+          <button type="button" data-v="tarjeta">💳 Tarjeta</button>
+          <button type="button" data-v="transferencia">🏦 Transf.</button>
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Fecha</label><input id="sa-fecha" type="date" value="${fechaSel}"></div>
+        <div class="field"><label>Nota (opcional)</label><input id="sa-nota"></div>
+      </div>
+      <p class="hint">Solo las salidas en efectivo de caja bajan el efectivo esperado en el corte.</p>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="sa-guardar" style="flex:1;">Guardar salida</button>
+        <button class="btn btn-outline" id="sa-cancelar" style="flex:1;">Cancelar</button>
+      </div>
+    `);
+    document.getElementById('sa-cancelar').addEventListener('click', closeModal);
+    const pay = document.getElementById('sa-pago-chips');
+    pay.querySelectorAll('button').forEach(b=>b.addEventListener('click', ()=>{
+      pay.querySelectorAll('button').forEach(x=>x.classList.remove('selected'));
+      b.classList.add('selected'); pay.dataset.sel = b.dataset.v;
+    }));
+    let guardando = false;
+    document.getElementById('sa-guardar').addEventListener('click', ()=>{
+      if(guardando) return;
+      const concepto = document.getElementById('sa-concepto').value.trim();
+      const monto = Number(document.getElementById('sa-monto').value)||0;
+      const f = document.getElementById('sa-fecha').value || todayStr();
+      if(!concepto){ showToast('Escribe en qué se gastó'); return; }
+      if(monto<=0){ showToast('Escribe el monto'); return; }
+      guardando = true;
+      expenses.unshift({
+        id: uidM('x'), concepto, monto,
+        categoria: document.getElementById('sa-categoria').value,
+        metodo: pay.dataset.sel || 'efectivo',
+        nota: document.getElementById('sa-nota').value.trim(),
+        fecha: (f===todayStr()) ? new Date().toISOString() : new Date(f+'T12:00:00').toISOString()
+      });
+      saveExpenses();
+      document.getElementById('caja-fecha').value = f;
+      closeModal(); renderCaja(); showToast('Salida registrada');
+    });
+  }
+
+  function printCorte(fecha){
+    const d = corteData(fecha);
+    const L = (a,b,cls)=>`<div class="line ${cls||''}"><span>${a}</span><span>${b}</span></div>`;
+    document.getElementById('ticket-body').innerHTML = `
+      <div class="center biz-name">${escapeHtml(business.nombre||'ZENTRAL AUTO CLUB')}</div>
+      <div class="center"><b>CORTE DE CAJA</b></div>
+      <div class="center">${fmtDateShort(fecha)}</div>
+      <div class="center">Impreso ${fmtTime(new Date().toISOString())}</div>
+      <hr>
+      ${L('Autos entregados', d.autos)}
+      ${L('Efectivo ('+d.by.efectivo.n+')', money(d.by.efectivo.t))}
+      ${L('Tarjeta ('+d.by.tarjeta.n+')', money(d.by.tarjeta.t))}
+      ${L('Transferencia ('+d.by.transferencia.n+')', money(d.by.transferencia.t))}
+      ${d.by.otro.n ? L('Sin método ('+d.by.otro.n+')', money(d.by.otro.t)) : ''}
+      ${d.memN ? L('Membresías ('+d.memN+')', money(d.memT)) : ''}
+      <hr>
+      ${L('TOTAL INGRESOS', money(d.ingresos), 'total')}
+      <hr>
+      <div><b>Salidas de dinero</b></div>
+      ${d.salidas.length ? d.salidas.map(e=>L(escapeHtml(e.concepto), '-'+money(e.monto))).join('') : '<div>Ninguna</div>'}
+      ${L('TOTAL SALIDAS', '-'+money(d.salidasTotal), 'total')}
+      <hr>
+      ${L('NETO DEL DIA', money(d.neto), 'total')}
+      ${L('EFECTIVO EN CAJA', money(d.efectivoCaja), 'total')}
+      <hr>
+      <div style="margin-top:22px;">Entrega: ____________________</div>
+      <div style="margin-top:18px;">Recibe: _____________________</div>
+    `;
+    setTimeout(()=>window.print(), 100);
+  }
+
+  // ---------- Indicador de conexión / datos sin sincronizar ----------
+  function refreshSyncBadge(){
+    const b = document.getElementById('sync-badge'); if(!b) return;
+    const pend = window.__pendingWrites || 0;
+    if(!navigator.onLine){
+      b.textContent = 'Sin conexión' + (pend ? ' · '+pend+' por subir' : '');
+      b.className = 'sync-badge off';
+    } else if(pend>0){
+      b.textContent = 'Sincronizando…';
+      b.className = 'sync-badge pend';
+    } else {
+      b.textContent = ''; b.className = 'sync-badge';
+    }
+  }
+  window.addEventListener('online', refreshSyncBadge);
+  window.addEventListener('offline', refreshSyncBadge);
+  window.addEventListener('sync-change', refreshSyncBadge);
+  window.addEventListener('beforeunload', e=>{
+    if((window.__pendingWrites||0)>0){ e.preventDefault(); e.returnValue=''; }
+  });
+
   // ---------- TICKETS ----------
   function ticketHeader(o){
     return `
@@ -1948,6 +2347,7 @@
     renderConfig(); renderMembershipConfig();
     refreshGlobalAlert();
     checkRenewals(); refreshMemDot();
+    renderDisplay(); refreshSyncBadge();
     document.getElementById('header-biz-name').textContent = business.nombre || 'ZENTRAL AUTO CLUB';
   }
   window.__startCarwashApp = init;
